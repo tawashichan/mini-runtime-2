@@ -1,6 +1,5 @@
 use crossbeam::channel;
 use futures::stream::StreamExt;
-use futures::task::{self, ArcWake};
 use mio::{self};
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
@@ -8,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::task::Wake;
 use std::task::{Context, Waker};
 use std::thread;
 use uuid;
@@ -22,7 +22,7 @@ pub static ENTRY_MAP: OnceCell<Mutex<EntryMap>> = OnceCell::new();
 static SENDER: OnceCell<Sender> = OnceCell::new();
 static TASK_LIST: OnceCell<Mutex<TaskMap>> = OnceCell::new();
 
-pub type TaskMap = HashMap<TaskId,()>;
+pub type TaskMap = HashMap<TaskId, ()>;
 
 type Sender = channel::Sender<Arc<Task>>;
 
@@ -46,10 +46,14 @@ struct Task {
     executor: channel::Sender<Arc<Task>>,
 }
 
-impl ArcWake for Task {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.schedule();
+impl Wake for Task {
+    fn wake(self: Arc<Self>) {
+        self.schedule();
     }
+
+    /*fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.schedule();
+    }*/
 }
 
 impl Task {
@@ -59,7 +63,7 @@ impl Task {
 
     fn poll(self: Arc<Self>) -> std::task::Poll<()> {
         println!("poll task {:?}", self.id);
-        let waker = task::waker(self.clone());
+        let waker = self.clone().into();
 
         let mut cx = Context::from_waker(&waker);
 
@@ -119,10 +123,8 @@ impl MiniTokio {
                         println!("task {:?} dropped", id);
                     }
                     std::task::Poll::Pending => {
-                        {
-                            let mut task_list = TASK_LIST.get().unwrap().lock().unwrap();
-                            task_list.insert(task.id, ());
-                        }
+                        let mut task_list = TASK_LIST.get().unwrap().lock().unwrap();
+                        task_list.insert(task.id, ());
                     }
                 };
             }
@@ -185,7 +187,7 @@ impl MiniTokio {
     pub fn register_entry(entry_map: &Mutex<EntryMap>, token: mio::Token, waker: Waker) {
         let mut entry_map = entry_map.lock().unwrap();
 
-        println!("{:?}", entry_map.values());
+        //println!("{:?}", entry_map.values());
 
         entry_map.insert(
             token,
@@ -225,7 +227,7 @@ fn main() {
 async fn process(mut stream: tcp_stream::TcpStream) {
     use futures::{AsyncReadExt, AsyncWriteExt};
 
-    let mut buf = [0; 10];
+    let mut buf = [0; 64];
 
     let _ = stream.read_exact(&mut buf).await;
 
